@@ -1,0 +1,20 @@
+{
+  "name": "meeting-ghost-root",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Meeting Ghost - AI Meeting Intelligence Platform",
+  "scripts": {
+    "install:all": "npm install && npm install --prefix server && npm install --prefix client",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "dev": "concurrently -n \"SERVER,CLIENT\" -c \"cyan,magenta\" \"npm run dev:server\" \"npm run dev:client\"",
+    "build:client": "npm run build --prefix client",
+    "build": "npm run build:client",
+    "test": "node server/tests/runTests.js && node server/tests/apiEndpoints.test.js && node server/tests/audioPipeline.test.js && node server/tests/preparation.test.js && node server/tests/mom.test.js && node server/tests/github.test.js",
+    "test:audio": "node server/tests/audioPipeline.test.js",
+    "start": "npm start --prefix server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
