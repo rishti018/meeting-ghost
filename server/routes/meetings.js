@@ -15,6 +15,11 @@ import {
   saveMeetingMom,
 } from '../services/meetingService.js';
 import { generateMinutesOfMeeting } from '../services/momService.js';
+import {
+  analyzeSpeakerSentiment,
+  analyzeAndSaveMeetingSentiment,
+  getMeetingSentiment,
+} from '../services/sentimentService.js';
 
 const router = express.Router();
 
@@ -160,6 +165,7 @@ router.post('/', upload.any(), async (req, res, next) => {
       decisions,
       followUpAgenda,
       preparation,
+      sentiment,
       isDemo,
     } = req.body || {};
 
@@ -206,6 +212,7 @@ router.post('/', upload.any(), async (req, res, next) => {
       actionItems,
       decisions,
       followUpAgenda,
+      sentiment,
     };
 
     // If intelligence was not pre-analyzed on client, call Gemini to generate intelligence
@@ -236,6 +243,7 @@ router.post('/', upload.any(), async (req, res, next) => {
       decisions: intelData.decisions || [],
       followUpAgenda: intelData.followUpAgenda || [],
       preparation: prepData || {},
+      sentiment: intelData.sentiment || sentiment || null,
       isDemo: Boolean(isDemo),
     });
 
@@ -297,6 +305,95 @@ router.post('/mom/generate-direct', async (req, res, next) => {
       data: momData,
     });
   } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/meetings/sentiment/analyze-direct
+ * Analyzes speaker sentiment & emotional dynamics directly from provided transcript & context
+ */
+router.post('/sentiment/analyze-direct', async (req, res, next) => {
+  try {
+    const { transcript, title, meetingDate, preparation } = req.body || {};
+    if (!transcript || !transcript.trim()) {
+      return res.status(400).json({ error: 'Transcript is required.' });
+    }
+
+    const sentimentData = await analyzeSpeakerSentiment({
+      transcript: transcript.trim(),
+      title: (title || '').trim(),
+      meetingDate: meetingDate || '',
+      preparation: preparation || {},
+    });
+
+    res.json({
+      success: true,
+      data: sentimentData,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/meetings/:id/sentiment
+ * Retrieves saved sentiment analysis for a meeting (optionally auto-analyzes if not yet analyzed)
+ */
+router.get('/:id/sentiment', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { autoAnalyze } = req.query;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: 'Invalid meeting ID format.' });
+    }
+
+    const sentiment = await getMeetingSentiment(id, {
+      autoAnalyzeIfMissing: autoAnalyze === 'true' || autoAnalyze === '1',
+    });
+
+    if (!sentiment) {
+      return res.status(404).json({
+        success: false,
+        error: 'Sentiment analysis not found for this meeting. Run POST /api/meetings/:id/sentiment/analyze to generate it.',
+      });
+    }
+
+    res.json({
+      success: true,
+      data: sentiment,
+    });
+  } catch (err) {
+    if (err.message === 'Meeting not found') {
+      return res.status(404).json({ error: err.message });
+    }
+    next(err);
+  }
+});
+
+/**
+ * POST /api/meetings/:id/sentiment/analyze
+ * Generates/re-generates speaker sentiment analysis and persists to MongoDB
+ */
+router.post('/:id/sentiment/analyze', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: 'Invalid meeting ID format.' });
+    }
+
+    const sentiment = await analyzeAndSaveMeetingSentiment(id);
+
+    res.json({
+      success: true,
+      data: sentiment,
+    });
+  } catch (err) {
+    if (err.message === 'Meeting not found') {
+      return res.status(404).json({ error: err.message });
+    }
     next(err);
   }
 });

@@ -10,6 +10,7 @@ import {
   Sliders,
   Ghost,
   Database,
+  GitBranch,
   X
 } from 'lucide-react';
 
@@ -19,6 +20,7 @@ const NAV_ITEMS = [
   { to: '/new', label: 'Ingest Meeting', icon: PlusCircle },
   { to: '/tasks', label: 'Action Tracker', icon: CheckSquare },
   { to: '/decisions', label: 'Decision Register', icon: Scale },
+  { to: '/developer-insights', label: 'Developer Insights', icon: GitBranch },
   { to: '/ask', label: 'Ask Meetings', icon: MessageSquareQuote },
   { to: '/settings', label: 'Workspace & Diagnostics', icon: Sliders },
 ];

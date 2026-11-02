@@ -2,7 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { config } from '../config/env.js';
 import { Meeting } from '../models/Meeting.js';
 import { Task } from '../models/Task.js';
-import { isDbConnected, connectToDatabase } from '../config/db.js';
+import { isDbConnected, connectToDatabase, ensureConnected } from '../config/db.js';
 
 let genAIClient = null;
 
@@ -350,12 +350,7 @@ export async function answerMeetingQuestion(question) {
     throw new Error('Question cannot be empty');
   }
 
-  if (!isDbConnected()) {
-    await connectToDatabase();
-  }
-  if (!isDbConnected()) {
-    throw new Error('Database not connected. Please configure a valid MONGODB_URI in server/.env');
-  }
+  await ensureConnected();
 
   const [allMeetings, allTasks] = await Promise.all([
     Meeting.find({}).populate('actionItems').sort({ createdAt: -1 }),

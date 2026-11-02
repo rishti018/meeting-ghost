@@ -82,15 +82,20 @@ export function Dashboard() {
         <div className="space-y-1 flex-1">
           <p className="font-medium">Failed to load workspace overview</p>
           <p className="text-ghost-secondary">{error}</p>
-          <button onClick={fetchData} className="btn-secondary mt-2">
-            Retry Connection
-          </button>
+          <div className="flex items-center gap-2 pt-2">
+            <button onClick={fetchData} className="btn-secondary">
+              Retry Connection
+            </button>
+            <Link to="/settings" className="btn-secondary">
+              Check Diagnostics
+            </Link>
+          </div>
         </div>
       </div>
     );
   }
 
-  const hasData = analytics && analytics.totalMeetings > 0;
+  const hasData = analytics && (analytics.totalMeetings > 0 || analytics.totalTasks > 0 || tasks.length > 0);
 
   if (!hasData) {
     return (

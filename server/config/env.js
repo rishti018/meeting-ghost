@@ -58,6 +58,33 @@ if (isPlaceholderUri(process.env.MONGODB_URI) && fs.existsSync(rootEnvPath)) {
 const rawUri = sanitize(process.env.MONGODB_URI);
 const rawDbName = sanitize(process.env.MONGODB_DB_NAME) || 'meeting_ghost';
 
+// GitHub App configuration validation
+function resolvePrivateKeyPath(p) {
+  if (!p) return null;
+  const cleaned = sanitize(p);
+  const candidates = [
+    path.resolve(process.cwd(), cleaned),
+    path.resolve(process.cwd(), 'server', cleaned),
+    path.resolve(__dirname, '..', cleaned),
+    path.resolve(__dirname, '../../', cleaned),
+    path.resolve(cleaned),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) {
+      try {
+        const stat = fs.statSync(c);
+        if (stat.isFile() && stat.size > 0) return c;
+      } catch (_) {}
+    }
+  }
+  return null;
+}
+
+const rawAppId = sanitize(process.env.GITHUB_APP_ID);
+const rawInstallationId = sanitize(process.env.GITHUB_INSTALLATION_ID);
+const rawKeyPath = sanitize(process.env.GITHUB_PRIVATE_KEY_PATH);
+const resolvedKeyPath = resolvePrivateKeyPath(rawKeyPath);
+
 export const config = {
   port: parseInt(process.env.PORT, 10) || 5000,
   nodeEnv: sanitize(process.env.NODE_ENV) || 'development',
@@ -67,4 +94,15 @@ export const config = {
   geminiApiKey: sanitize(process.env.GEMINI_API_KEY),
   geminiModel: sanitize(process.env.GEMINI_MODEL) || 'gemini-3.8-flash',
   envFilesLoaded: loadedFiles,
+  githubApp: {
+    appId: rawAppId,
+    installationId: rawInstallationId,
+    privateKeyPath: resolvedKeyPath,
+    isConfigured: Boolean(rawAppId && rawInstallationId && resolvedKeyPath),
+    missingConfig: [
+      !rawAppId && 'GITHUB_APP_ID',
+      !rawInstallationId && 'GITHUB_INSTALLATION_ID',
+      (!rawKeyPath || !resolvedKeyPath) && 'GITHUB_PRIVATE_KEY_PATH',
+    ].filter(Boolean),
+  },
 };

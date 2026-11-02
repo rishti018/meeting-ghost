@@ -1022,6 +1022,7 @@ export function NewMeeting() {
         actionItems: analysisResult?.actionItems,
         decisions: analysisResult?.decisions,
         followUpAgenda: analysisResult?.followUpAgenda,
+        sentiment: analysisResult?.sentiment || null,
         preparation: {
           personName,
           linkedinUrl,
@@ -2238,9 +2239,16 @@ export function NewMeeting() {
 
           {/* Executive Summary */}
           <div className="ghost-panel p-4 space-y-2">
-            <span className="text-[10px] font-semibold text-ghost-secondary uppercase tracking-wider block">
-              Executive Summary
-            </span>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[10px] font-semibold text-ghost-secondary uppercase tracking-wider block">
+                Executive Summary
+              </span>
+              {analysisResult.sentiment?.conversationalTone && (
+                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-[11px] font-medium bg-[#EEF2FF] text-[#3730A3] border border-[#C7D2FE]">
+                  <span>Tone: {analysisResult.sentiment.conversationalTone}</span>
+                </span>
+              )}
+            </div>
             <p className="text-xs sm:text-sm text-ghost-text leading-relaxed font-medium">
               {analysisResult.summary}
             </p>
@@ -2248,6 +2256,24 @@ export function NewMeeting() {
               <div className="pt-2 border-t border-ghost-border text-xs text-ghost-secondary leading-relaxed">
                 <strong className="text-ghost-text">Detailed Proceedings: </strong>
                 {analysisResult.detailedSummary}
+              </div>
+            )}
+            {analysisResult.sentiment?.speakers?.length > 0 && (
+              <div className="pt-2 border-t border-ghost-border flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-[10px] font-semibold text-ghost-secondary uppercase tracking-wider">
+                  Speaker Sentiment:
+                </span>
+                {analysisResult.sentiment.speakers.map((sp, idx) => (
+                  <span
+                    key={idx}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm text-[11px] bg-[#F4F6FA] border border-[#DCE2EB] text-[#172033]"
+                  >
+                    <strong>{sp.speaker}:</strong> {sp.overallSentiment}
+                    {sp.emotionalSignals?.[0] && sp.emotionalSignals[0] !== 'None' && (
+                      <span className="text-[#5145CD] font-medium">({sp.emotionalSignals[0]})</span>
+                    )}
+                  </span>
+                ))}
               </div>
             )}
           </div>

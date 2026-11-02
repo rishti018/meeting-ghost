@@ -24,6 +24,8 @@ import { SkeletonList } from '../components/SkeletonLoader';
 import { EmptyState } from '../components/EmptyState';
 import { SegmentedCountdown } from '../components/SegmentedCountdown';
 import { GitHubLinkModal } from '../components/GitHubLinkModal';
+import { CircularProgressRing } from '../components/CircularProgressRing';
+import { calculateTaskProgress } from '../utils/taskProgress';
 import {
   formatDate,
   formatDateTime,
@@ -312,16 +314,18 @@ export function ActionTracker() {
                 <tr className="border-b border-[#DCE2EB] text-[#526078] uppercase text-[10px] tracking-wider bg-[#F4F6FA]">
                   <th className="py-2.5 px-3.5">Deliverable</th>
                   <th className="py-2.5 px-3.5">Assignee</th>
+                  <th className="py-2.5 px-3.5 text-center min-w-[70px]">Progress</th>
                   <th className="py-2.5 px-3.5 min-w-[210px]">GitHub Resource</th>
                   <th className="py-2.5 px-3.5 min-w-[180px]">Start & Timeline</th>
                   <th className="py-2.5 px-3.5 min-w-[240px]">Deadline & Countdown (DD:HH:MM:SS)</th>
                   <th className="py-2.5 px-3.5">Priority</th>
                   <th className="py-2.5 px-3.5">Meeting Brief</th>
-                  <th className="py-2.5 px-3.5 text-right">Status</th>
+                  <th className="py-2.5 px-3.5 text-right">Local Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#DCE2EB]">
                 {filteredTasks.map((t) => {
+                  const progress = calculateTaskProgress(t);
                   return (
                     <tr key={t.id} className="hover:bg-[#F4F6FA] transition-colors">
                       {/* Deliverable */}
@@ -349,6 +353,26 @@ export function ActionTracker() {
                         <span className="px-2 py-0.5 rounded-sm bg-[#F4F6FA] text-ghost-text border border-[#DCE2EB] font-medium text-[11px]">
                           {t.owner || 'Unassigned'}
                         </span>
+                      </td>
+
+                      {/* Progress Ring */}
+                      <td className="py-3 px-3.5 text-center">
+                        <div className="flex flex-col items-center justify-center">
+                          <CircularProgressRing
+                            percentage={progress.percentage}
+                            label={progress.label}
+                            detail={progress.detail}
+                            source={progress.source}
+                          />
+                          {progress.statusDivergence && (
+                            <span
+                              className="mt-1 text-[8px] font-semibold px-1 py-0.2 rounded-xs bg-amber-50 text-amber-800 border border-amber-200 block truncate max-w-[85px] leading-tight"
+                              title={progress.statusDivergence.description}
+                            >
+                              {progress.statusDivergence.badge}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* GitHub Resource & Progress Tracking */}
@@ -387,49 +411,93 @@ export function ActionTracker() {
                               </div>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-                              {t.github.issueNumber ? (
-                                <a
-                                  href={t.github.htmlUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded-xs font-semibold hover:underline ${
-                                    t.github.prMerged || t.github.issueState === 'closed'
-                                      ? 'bg-[#ECFDF5] text-[#15803D] border border-[#A7F3D0]'
-                                      : 'bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE]'
-                                  }`}
-                                >
-                                  {t.github.isPullRequest ? (
-                                    <GitPullRequest className="w-2.5 h-2.5" />
-                                  ) : (
-                                    <CheckSquare className="w-2.5 h-2.5" />
-                                  )}
-                                  <span>#{t.github.issueNumber} {t.github.prMerged ? 'Merged' : (t.github.issueState || 'Open')}</span>
-                                </a>
-                              ) : null}
-
-                              {t.github.assignee && (
-                                <span className="text-[#526078] font-medium">
-                                  @{t.github.assignee}
-                                </span>
-                              )}
-                            </div>
-
-                            {t.github.checklistTotal > 0 && (
-                              <div className="text-[10px] text-[#526078] flex items-center gap-1">
-                                <CheckSquare className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
-                                <span className="font-medium text-[#172033]">{t.github.checklistCompleted}/{t.github.checklistTotal} checklist tasks</span>
+                            {t.github.syncStatus === 'error' ? (
+                              <div className="p-1.5 rounded-xs bg-red-50 border border-red-200 text-red-800 text-[10px] space-y-1">
+                                <div className="flex items-center gap-1 font-semibold text-red-700">
+                                  <AlertCircle className="w-3 h-3 shrink-0" />
+                                  <span>{t.github.issueNumber ? `Issue #${t.github.issueNumber} Not Found` : 'Sync Failed'}</span>
+                                </div>
+                                <p className="text-[9px] text-red-600 truncate" title={t.github.syncError}>
+                                  {t.github.syncError || 'Resource not found on GitHub (404)'}
+                                </p>
+                                <div className="pt-0.5 flex items-center gap-2">
+                                  <button
+                                    onClick={() => setLinkingTask(t)}
+                                    className="text-[9px] font-bold text-red-700 underline hover:text-red-900"
+                                  >
+                                    Re-link / Fix
+                                  </button>
+                                  <button
+                                    onClick={() => handleUnlinkGitHub(t.id)}
+                                    className="text-[9px] text-slate-500 hover:text-red-600"
+                                  >
+                                    Unlink
+                                  </button>
+                                </div>
                               </div>
-                            )}
+                            ) : (
+                              <>
+                                <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                                  {t.github.issueNumber ? (
+                                    <a
+                                      href={t.github.htmlUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded-xs font-semibold hover:underline ${
+                                        t.github.prMerged
+                                          ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                                          : t.github.issueState === 'closed'
+                                          ? 'bg-[#ECFDF5] text-[#15803D] border border-[#A7F3D0]'
+                                          : 'bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE]'
+                                      }`}
+                                      title={`GitHub ${t.github.isPullRequest ? 'PR' : 'Issue'} #${t.github.issueNumber} is ${t.github.prMerged ? 'Merged' : t.github.issueState}`}
+                                    >
+                                      {t.github.isPullRequest ? (
+                                        <GitPullRequest className="w-2.5 h-2.5" />
+                                      ) : (
+                                        <CheckSquare className="w-2.5 h-2.5" />
+                                      )}
+                                      <span>
+                                        #{t.github.issueNumber} {t.github.prMerged ? 'Merged' : (t.github.issueState === 'closed' ? 'Closed' : 'Open')}
+                                      </span>
+                                    </a>
+                                  ) : (
+                                    <span className="px-1.5 py-0.2 rounded-xs font-semibold text-[10px] bg-slate-100 text-slate-700 border border-slate-200">
+                                      Repository Linked
+                                    </span>
+                                  )}
 
-                            <div className="text-[9px] text-[#526078] flex items-center justify-between">
-                              <span>Synced: {t.github.lastSyncedAt ? formatTimeAgo(t.github.lastSyncedAt) : 'Recent'}</span>
-                              <span className={`font-semibold uppercase tracking-wider ${
-                                t.github.syncStatus === 'synced' ? 'text-emerald-700' : 'text-amber-700'
-                              }`}>
-                                {t.github.syncStatus}
-                              </span>
-                            </div>
+                                  {t.github.assignee && (
+                                    <span className="text-[#526078] font-medium">
+                                      @{t.github.assignee}
+                                    </span>
+                                  )}
+                                </div>
+
+                                {t.github.checklistTotal > 0 && (
+                                  <div className="text-[10px] text-[#526078] flex items-center gap-1">
+                                    <CheckSquare className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                                    <span className="font-medium text-[#172033]">{t.github.checklistCompleted}/{t.github.checklistTotal} checklist tasks</span>
+                                  </div>
+                                )}
+
+                                {progress.statusDivergence && (
+                                  <div className="text-[9px] text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded-xs border border-amber-200 flex items-center gap-1">
+                                    <AlertTriangle className="w-2.5 h-2.5 shrink-0 text-amber-600" />
+                                    <span>{progress.statusDivergence.badge}</span>
+                                  </div>
+                                )}
+
+                                <div className="text-[9px] text-[#526078] flex items-center justify-between">
+                                  <span>Synced: {t.github.lastSyncedAt ? formatTimeAgo(t.github.lastSyncedAt) : 'Recent'}</span>
+                                  <span className={`font-semibold uppercase tracking-wider ${
+                                    t.github.syncStatus === 'synced' ? 'text-emerald-700' : 'text-amber-700'
+                                  }`}>
+                                    {t.github.syncStatus}
+                                  </span>
+                                </div>
+                              </>
+                            )}
                           </div>
                         ) : (
                           <button

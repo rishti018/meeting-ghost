@@ -21,6 +21,9 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
   const [customRepoInput, setCustomRepoInput] = useState('');
   const [useCustomRepo, setUseCustomRepo] = useState(false);
 
+  // Link mode: 'issue' or 'repository'
+  const [linkMode, setLinkMode] = useState('issue');
+
   const [issues, setIssues] = useState([]);
   const [loadingIssues, setLoadingIssues] = useState(false);
   const [selectedIssueNumber, setSelectedIssueNumber] = useState('');
@@ -28,6 +31,7 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
 
   const [issueDetails, setIssueDetails] = useState(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
+  const [detailsError, setDetailsError] = useState(null);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -37,6 +41,7 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
     if (!isOpen) return;
 
     setError(null);
+    setDetailsError(null);
     setLoadingRepos(true);
     api.listGitHubRepos()
       .then(res => {
@@ -44,6 +49,12 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
         setRepos(repoList);
         if (task?.github?.repoFullName) {
           setSelectedRepoFullName(task.github.repoFullName);
+          if (task.github.issueNumber) {
+            setLinkMode('issue');
+            setSelectedIssueNumber(String(task.github.issueNumber));
+          } else {
+            setLinkMode('repository');
+          }
         } else if (repoList.length > 0) {
           setSelectedRepoFullName(repoList[0].fullName);
         }
@@ -69,17 +80,24 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
 
     setLoadingIssues(true);
     setIssueDetails(null);
+    setDetailsError(null);
 
     api.listGitHubIssues(owner, repo, 'all')
       .then(res => {
         const issueList = res.data || [];
         setIssues(issueList);
-        if (task?.github?.issueNumber) {
-          setSelectedIssueNumber(String(task.github.issueNumber));
-        } else if (issueList.length > 0) {
-          setSelectedIssueNumber(String(issueList[0].number));
+        if (issueList.length === 0) {
+          // If no issues exist on GitHub, recommend linking the repository directly
+          if (!task?.github?.issueNumber) {
+            setLinkMode('repository');
+          }
         } else {
-          setSelectedIssueNumber('');
+          setLinkMode('issue');
+          if (task?.github?.issueNumber) {
+            setSelectedIssueNumber(String(task.github.issueNumber));
+          } else {
+            setSelectedIssueNumber(String(issueList[0].number));
+          }
         }
       })
       .catch(err => {
@@ -93,11 +111,18 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
 
   // Load details when issue changes
   useEffect(() => {
+    if (linkMode === 'repository') {
+      setIssueDetails(null);
+      setDetailsError(null);
+      return;
+    }
+
     const activeRepo = useCustomRepo ? customRepoInput.trim() : selectedRepoFullName;
     const num = selectedIssueNumber || customIssueNumber;
 
     if (!activeRepo || !activeRepo.includes('/') || !num) {
       setIssueDetails(null);
+      setDetailsError(null);
       return;
     }
 
@@ -105,17 +130,20 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
     if (!owner || !repo) return;
 
     setLoadingDetails(true);
+    setDetailsError(null);
     api.getGitHubIssueDetails(owner, repo, num)
       .then(res => {
         setIssueDetails(res.data);
+        setDetailsError(null);
       })
       .catch(err => {
-        console.warn('Failed to load issue details:', err.message);
+        setIssueDetails(null);
+        setDetailsError(`Issue or Pull Request #${num} was not found on GitHub in ${owner}/${repo} (404 Not Found).`);
       })
       .finally(() => {
         setLoadingDetails(false);
       });
-  }, [selectedRepoFullName, customRepoInput, useCustomRepo, selectedIssueNumber, customIssueNumber]);
+  }, [selectedRepoFullName, customRepoInput, useCustomRepo, selectedIssueNumber, customIssueNumber, linkMode]);
 
   if (!isOpen || !task) return null;
 
@@ -127,7 +155,18 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
     }
 
     const [repoOwner, repoName] = activeRepo.split('/');
-    const issueNum = selectedIssueNumber || customIssueNumber;
+    const isRepoOnly = linkMode === 'repository';
+    const issueNum = isRepoOnly ? null : (selectedIssueNumber || customIssueNumber);
+
+    if (!isRepoOnly && !issueNum) {
+      setError('Please select or enter an issue/PR number, or switch to "Link full repository".');
+      return;
+    }
+
+    if (!isRepoOnly && detailsError) {
+      setError(detailsError);
+      return;
+    }
 
     try {
       setSaving(true);
@@ -136,7 +175,7 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
         repoOwner,
         repoName,
         issueNumber: issueNum ? parseInt(issueNum, 10) : null,
-        resourceType: issueDetails?.isPullRequest ? 'pull_request' : 'issue',
+        resourceType: isRepoOnly ? 'repository' : (issueDetails?.isPullRequest ? 'pull_request' : 'issue'),
       });
 
       if (onLinked) onLinked(res.data);
@@ -194,14 +233,14 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
                 onClick={() => setUseCustomRepo(!useCustomRepo)}
                 className="text-[10px] text-[#5145CD] hover:underline"
               >
-                {useCustomRepo ? 'Choose from my repos' : 'Enter external / collaborator repo'}
+                {useCustomRepo ? 'Choose from authorized repos' : 'Specify external / collaborator repo'}
               </button>
             </div>
 
             {useCustomRepo ? (
               <input
                 type="text"
-                placeholder="owner/repo (e.g. rishti018/taskflow-todo-app or facebook/react)"
+                placeholder="owner/repo (e.g. rishti018/meeting-ghost or facebook/react)"
                 value={customRepoInput}
                 onChange={(e) => setCustomRepoInput(e.target.value)}
                 className="input-base text-xs py-1.5 px-2.5 font-mono"
@@ -213,7 +252,7 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
                 disabled={loadingRepos}
                 className="input-base text-xs py-1.5 px-2.5 cursor-pointer font-mono"
               >
-                {repos.length === 0 && <option value="">No repositories found</option>}
+                {repos.length === 0 && <option value="">No authorized repositories found</option>}
                 {repos.map(r => (
                   <option key={r.id || r.fullName} value={r.fullName}>
                     {r.fullName} {r.private ? '(Private)' : ''}
@@ -223,54 +262,105 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
             )}
           </div>
 
-          {/* 2. Issue or Pull Request Selection */}
+          {/* 2. Link Mode Switcher */}
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label className="text-[10px] font-bold text-[#526078] uppercase tracking-wider block">
-                2. Select Issue or Pull Request
-              </label>
-              {loadingIssues && (
-                <span className="text-[10px] text-[#526078] flex items-center gap-1">
-                  <RefreshCw className="w-2.5 h-2.5 animate-spin" />
-                  <span>Loading issues...</span>
-                </span>
-              )}
-            </div>
-
-            {issues.length > 0 ? (
-              <select
-                value={selectedIssueNumber}
-                onChange={(e) => {
-                  setSelectedIssueNumber(e.target.value);
-                  setCustomIssueNumber('');
-                }}
-                className="input-base text-xs py-1.5 px-2.5 cursor-pointer"
-              >
-                <option value="">-- Select an issue or PR --</option>
-                {issues.map(item => (
-                  <option key={item.number} value={item.number}>
-                    #{item.number} [{item.isPullRequest ? 'PR' : 'Issue'} - {item.state}] {item.title}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div className="space-y-1">
+            <label className="text-[10px] font-bold text-[#526078] uppercase tracking-wider block">
+              2. Target Resource Type
+            </label>
+            <div className="flex items-center gap-4 text-xs pt-0.5">
+              <label className="inline-flex items-center gap-1.5 cursor-pointer">
                 <input
-                  type="number"
-                  placeholder="Issue or Pull Request # (e.g. 1)"
-                  value={customIssueNumber}
-                  onChange={(e) => setCustomIssueNumber(e.target.value)}
-                  className="input-base text-xs py-1.5 px-2.5 font-mono"
+                  type="radio"
+                  name="linkMode"
+                  value="issue"
+                  checked={linkMode === 'issue'}
+                  onChange={() => setLinkMode('issue')}
+                  className="text-[#5145CD] focus:ring-[#5145CD]"
                 />
-                <span className="text-[10px] text-[#526078] block">
-                  No open issues listed in repository dropdown. You can enter an issue number manually or link the repository.
-                </span>
-              </div>
-            )}
+                <span className="font-medium text-[#172033]">Specific Issue / Pull Request</span>
+              </label>
+              <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="radio"
+                  name="linkMode"
+                  value="repository"
+                  checked={linkMode === 'repository'}
+                  onChange={() => {
+                    setLinkMode('repository');
+                    setSelectedIssueNumber('');
+                    setCustomIssueNumber('');
+                    setError(null);
+                    setDetailsError(null);
+                  }}
+                  className="text-[#5145CD] focus:ring-[#5145CD]"
+                />
+                <span className="font-medium text-[#172033]">Link Full Repository (no issue)</span>
+              </label>
+            </div>
           </div>
 
+          {/* 3. Issue or Pull Request Selection (if issue mode) */}
+          {linkMode === 'issue' && (
+            <div className="space-y-1.5 pt-1">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-bold text-[#526078] uppercase tracking-wider block">
+                  3. Select Issue or Pull Request
+                </label>
+                {loadingIssues && (
+                  <span className="text-[10px] text-[#526078] flex items-center gap-1">
+                    <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                    <span>Loading issues...</span>
+                  </span>
+                )}
+              </div>
+
+              {issues.length > 0 ? (
+                <select
+                  value={selectedIssueNumber}
+                  onChange={(e) => {
+                    setSelectedIssueNumber(e.target.value);
+                    setCustomIssueNumber('');
+                  }}
+                  className="input-base text-xs py-1.5 px-2.5 cursor-pointer"
+                >
+                  <option value="">-- Select an issue or PR --</option>
+                  {issues.map(item => (
+                    <option key={item.number} value={item.number}>
+                      #{item.number} [{item.isPullRequest ? 'PR' : 'Issue'} - {item.state}] {item.title}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="space-y-1">
+                  <input
+                    type="number"
+                    placeholder="Enter Issue or PR # (e.g. 1)"
+                    value={customIssueNumber}
+                    onChange={(e) => {
+                      setCustomIssueNumber(e.target.value);
+                      setSelectedIssueNumber('');
+                    }}
+                    className="input-base text-xs py-1.5 px-2.5 font-mono"
+                  />
+                  <div className="p-2 rounded-xs bg-slate-50 border border-slate-200 text-slate-600 text-[11px] leading-relaxed">
+                    <p className="font-semibold text-slate-700">Notice:</p>
+                    This repository currently has <strong>0 open/closed issues</strong> on GitHub. If you haven't created an issue on GitHub yet, you can switch to <em>"Link Full Repository"</em> above.
+                  </div>
+                </div>
+              )}
+
+              {/* Real-time Issue Validation Error Alert */}
+              {detailsError && (
+                <div className="p-2 rounded-xs bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                  <span>{detailsError}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Live Preview Card */}
-          {issueDetails && (
+          {issueDetails && linkMode === 'issue' && (
             <div className="p-3.5 rounded-sm bg-[#F8FAFC] border border-[#DCE2EB] space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-bold text-[#526078] uppercase tracking-wider flex items-center gap-1">
@@ -329,6 +419,22 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
               )}
             </div>
           )}
+
+          {linkMode === 'repository' && (
+            <div className="p-3 rounded-sm bg-blue-50/60 border border-blue-200 text-blue-900 text-[11px] flex items-start gap-2">
+              <Github className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-blue-950">Linking Repository Scope</p>
+                <p className="text-blue-800">
+                  This deliverable will be linked to the repository{' '}
+                  <code className="font-mono bg-blue-100/80 px-1 py-0.5 rounded text-[10px]">
+                    {useCustomRepo ? customRepoInput : selectedRepoFullName}
+                  </code>
+                  . Progress tracking will be ready for when issues or pull requests are added.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -344,7 +450,7 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
           <button
             type="button"
             onClick={handleLink}
-            disabled={saving}
+            disabled={saving || (linkMode === 'issue' && Boolean(detailsError))}
             className="btn-primary text-xs py-1 px-4 flex items-center gap-1.5"
           >
             {saving ? 'Linking...' : 'Link to GitHub Resource'}
@@ -356,4 +462,3 @@ export function GitHubLinkModal({ task, isOpen, onClose, onLinked }) {
 }
 
 export default GitHubLinkModal;
-

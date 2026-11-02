@@ -1,21 +1,10 @@
 import mongoose from 'mongoose';
 import { Meeting } from '../models/Meeting.js';
 import { Task } from '../models/Task.js';
-import { isDbConnected, connectToDatabase, getLastDiagnostic } from '../config/db.js';
+import { isDbConnected, connectToDatabase, getLastDiagnostic, ensureConnected } from '../config/db.js';
 import { extractWithRuleFallback, analyzeMeetingTranscript } from './geminiService.js';
 import { generateMinutesOfMeeting, sanitizeMomOutput } from './momService.js';
-
-async function ensureConnected() {
-  if (!isDbConnected()) {
-    await connectToDatabase();
-  }
-  if (!isDbConnected()) {
-    const diag = getLastDiagnostic();
-    const error = new Error(diag?.message || 'Database not connected. Please verify your MongoDB Atlas connection.');
-    error.status = 503;
-    throw error;
-  }
-}
+import { analyzeAndSaveMeetingSentiment, extractSentimentWithRuleFallback } from './sentimentService.js';
 
 /**
  * Save meeting and its action items atomically with rollback on error.
@@ -37,6 +26,7 @@ export async function saveMeetingWithTasks({
   decisions = [],
   followUpAgenda = [],
   preparation = {},
+  sentiment = null,
   isDemo = false,
 }) {
   await ensureConnected();
@@ -98,6 +88,18 @@ export async function saveMeetingWithTasks({
     desiredOutcome: (preparation.desiredOutcome || '').trim(),
   } : {};
 
+  let effectiveSentiment = sentiment;
+  if (!effectiveSentiment && finalTranscript) {
+    try {
+      effectiveSentiment = extractSentimentWithRuleFallback({
+        transcript: finalTranscript,
+        title: meetingTitle,
+        meetingDate: effectiveDate,
+        preparation: formattedPrep,
+      });
+    } catch (_) {}
+  }
+
   if (meeting) {
     // Update existing meeting document
     meeting.title = meetingTitle;
@@ -116,6 +118,9 @@ export async function saveMeetingWithTasks({
     if (finalFollowUp.length > 0) meeting.followUpAgenda = finalFollowUp;
     if (Object.keys(formattedPrep).some(k => formattedPrep[k])) {
       meeting.preparation = formattedPrep;
+    }
+    if (effectiveSentiment) {
+      meeting.sentiment = effectiveSentiment;
     }
     meeting.isDemo = Boolean(isDemo);
     await meeting.save();
@@ -137,6 +142,7 @@ export async function saveMeetingWithTasks({
       })),
       followUpAgenda: finalFollowUp,
       preparation: formattedPrep,
+      sentiment: effectiveSentiment || null,
       isDemo: Boolean(isDemo),
     });
     await meeting.save();
@@ -191,6 +197,13 @@ export async function saveMeetingWithTasks({
       await meeting.save();
     }
 
+    // Trigger non-blocking sentiment analysis if not already present
+    if (!meeting.sentiment && finalTranscript) {
+      analyzeAndSaveMeetingSentiment(meeting._id).catch(err => {
+        console.warn(`[MeetingService] Background sentiment analysis deferred: ${err.message}`);
+      });
+    }
+
     const meetingObj = meeting.toObject();
     meetingObj.actionItems = savedTasks.map(t => t.toObject());
     return meetingObj;
@@ -208,7 +221,8 @@ export async function listMeetings({ search = '', page = 1, limit = 50 } = {}) {
 
   const query = {};
   if (search && search.trim().length > 0) {
-    const regex = new RegExp(search.trim(), 'i');
+    const escapedSearch = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(escapedSearch, 'i');
     query.$or = [
       { title: regex },
       { summary: regex },
@@ -289,6 +303,22 @@ export async function getMeetingById(id) {
     meetingObj.actionItems = tasks.map(t => (t.toObject ? t.toObject() : t));
   }
 
+  // Self-healing for emotion-aware sentiment intelligence
+  if (!meetingObj.sentiment && meeting.transcript && meeting.transcript.trim().length > 15) {
+    try {
+      const fallbackSentiment = extractSentimentWithRuleFallback({
+        transcript: meeting.transcript,
+        title: meeting.title,
+        meetingDate: meeting.date,
+        preparation: meeting.preparation,
+      });
+      await Meeting.findByIdAndUpdate(meeting._id, { sentiment: fallbackSentiment });
+      meetingObj.sentiment = fallbackSentiment;
+    } catch (err) {
+      console.warn(`[MeetingService] Sentiment self-healing skipped for ${meeting._id}: ${err.message}`);
+    }
+  }
+
   return meetingObj;
 }
 
@@ -328,6 +358,7 @@ export async function reprocessMeetingById(id) {
     decisions: intel.decisions,
     followUpAgenda: intel.followUpAgenda,
     preparation: meeting.preparation,
+    sentiment: intel.sentiment,
     isDemo: meeting.isDemo,
   });
 }
@@ -604,14 +635,14 @@ export async function getDashboardAnalytics() {
     recentMeetingsRaw,
     ownerAgg
   ] = await Promise.all([
-    Meeting.countDocuments({}),
-    Task.countDocuments({}),
-    Task.countDocuments({ status: 'Pending' }),
-    Task.countDocuments({ status: 'In Progress' }),
-    Task.countDocuments({ status: 'Completed' }),
-    Task.countDocuments({ priority: 'High' }),
-    Task.countDocuments({ priority: 'Medium' }),
-    Task.countDocuments({ priority: 'Low' }),
+    Meeting.countDocuments({}).catch(() => 0),
+    Task.countDocuments({}).catch(() => 0),
+    Task.countDocuments({ status: 'Pending' }).catch(() => 0),
+    Task.countDocuments({ status: 'In Progress' }).catch(() => 0),
+    Task.countDocuments({ status: 'Completed' }).catch(() => 0),
+    Task.countDocuments({ priority: 'High' }).catch(() => 0),
+    Task.countDocuments({ priority: 'Medium' }).catch(() => 0),
+    Task.countDocuments({ priority: 'Low' }).catch(() => 0),
     Meeting.find({}, 'decisions').lean().catch(() => []),
     Meeting.find({}).sort({ createdAt: -1 }).limit(5).lean().catch(() => []),
     Task.aggregate([
@@ -673,8 +704,18 @@ export async function getDashboardAnalytics() {
         meetingId = `recent-meeting-${idx}`;
       }
 
-      const rawDate = m?.date || (m?.createdAt ? new Date(m.createdAt).toISOString().split('T')[0] : '');
-      const safeDate = rawDate || new Date().toISOString().split('T')[0];
+      let safeDate = '';
+      try {
+        if (m?.date) {
+          safeDate = String(m.date);
+        } else if (m?.createdAt) {
+          const parsed = new Date(m.createdAt);
+          safeDate = isNaN(parsed.getTime()) ? '' : parsed.toISOString().split('T')[0];
+        }
+      } catch (_) {}
+      if (!safeDate) {
+        safeDate = new Date().toISOString().split('T')[0];
+      }
 
       return {
         id: meetingId,

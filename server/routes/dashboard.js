@@ -17,7 +17,20 @@ async function handleStats(req, res, next) {
       data: stats,
     });
   } catch (err) {
-    if (!isDbConnected() || err.status === 503 || err.message?.includes('Database not connected') || err.message?.includes('MongoDB')) {
+    const isDbErr = !isDbConnected() ||
+      err.status === 503 ||
+      err.name?.startsWith('Mongo') ||
+      err.name?.startsWith('Mongoose') ||
+      err.message?.includes('Database not connected') ||
+      err.message?.includes('MongoDB') ||
+      err.message?.includes('buffering timed out') ||
+      err.message?.includes('connection') ||
+      err.message?.includes('whitelist') ||
+      err.message?.includes('IP Access List') ||
+      err.message?.includes('topology') ||
+      err.message?.includes('alert number 80');
+
+    if (isDbErr) {
       const diag = getLastDiagnostic();
       return res.status(503).json({
         error: diag?.message || err.message || 'Database temporarily unavailable. Please verify your MongoDB Atlas connection.',

@@ -11,9 +11,247 @@ import {
   linkTaskToGitHub,
   unlinkTaskFromGitHub,
   syncTaskWithGitHub,
+  verifyGitHubAppConnectivity,
+  getDeveloperInsights,
+  getRecentCommits,
+  getRepositoryPullRequests,
+  getRepositoryIssues,
+  getDeveloperWiseActivity,
+  getTeamActivitySummary,
 } from '../services/githubService.js';
+import {
+  getCommitmentExecutionInsights,
+  getSingleTaskCommitmentInsight,
+} from '../services/commitmentIntelligenceService.js';
 
 const router = express.Router();
+
+/**
+ * GET /api/github/commitment-insights
+ * Retrieve Commitment vs Execution Intelligence across meeting action items
+ */
+router.get('/commitment-insights', async (req, res, next) => {
+  try {
+    const { meetingId, owner, status, userMapping, refresh } = req.query;
+
+    let parsedUserMapping = {};
+    if (userMapping) {
+      try {
+        parsedUserMapping = typeof userMapping === 'string' ? JSON.parse(userMapping) : userMapping;
+      } catch (_) {
+        parsedUserMapping = {};
+      }
+    }
+
+    const result = await getCommitmentExecutionInsights({
+      meetingId,
+      owner,
+      status,
+      userMapping: parsedUserMapping,
+      refresh: refresh === 'true' || refresh === '1',
+    });
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/github/commitment-insights
+ * Retrieve Commitment vs Execution Intelligence with explicit userMapping object payload
+ */
+router.post('/commitment-insights', async (req, res, next) => {
+  try {
+    const { meetingId, owner, status, userMapping = {}, refresh = false } = req.body;
+
+    const result = await getCommitmentExecutionInsights({
+      meetingId,
+      owner,
+      status,
+      userMapping,
+      refresh: Boolean(refresh),
+    });
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/github/commitment-insights/:taskId
+ * Retrieve Commitment vs Execution Intelligence for a single action item
+ */
+router.get('/commitment-insights/:taskId', async (req, res, next) => {
+  try {
+    const { taskId } = req.params;
+    const { mappedUser, refresh } = req.query;
+
+    const result = await getSingleTaskCommitmentInsight(taskId, {
+      mappedUser,
+      refresh: refresh === 'true' || refresh === '1',
+    });
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/github/developer-insights/summary
+ * Retrieve overall team activity summary and metrics
+ */
+router.get('/developer-insights/summary', async (req, res, next) => {
+  try {
+    const { owner, repo, developer } = req.query;
+    const summary = await getTeamActivitySummary({ owner, repo, developer });
+    res.json({
+      success: true,
+      data: summary,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/github/developer-insights/commits
+ * Retrieve recent commits from the repository with author, message, branch, and date
+ */
+router.get('/developer-insights/commits', async (req, res, next) => {
+  try {
+    const { owner, repo, branch, limit, page, author } = req.query;
+    const result = await getRecentCommits({ owner, repo, branch, limit, page, author });
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/github/developer-insights/pulls
+ * Retrieve pull requests from the repository with author, title, state, and merged status
+ */
+router.get('/developer-insights/pulls', async (req, res, next) => {
+  try {
+    const { owner, repo, state, limit, page, author } = req.query;
+    const result = await getRepositoryPullRequests({ owner, repo, state, limit, page, author });
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/github/developer-insights/issues
+ * Retrieve issues from the repository with assignee, state, creation/update dates
+ */
+router.get('/developer-insights/issues', async (req, res, next) => {
+  try {
+    const { owner, repo, state, limit, page, assignee, author } = req.query;
+    const result = await getRepositoryIssues({ owner, repo, state, limit, page, assignee, author });
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/github/developer-insights/developers
+ * Retrieve developer-wise activity grouped by GitHub username
+ */
+router.get('/developer-insights/developers', async (req, res, next) => {
+  try {
+    const { owner, repo, hideBots, developer } = req.query;
+    const result = await getDeveloperWiseActivity({
+      owner,
+      repo,
+      hideBots: hideBots === 'true' || hideBots === '1',
+      developer,
+    });
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/github/developer-insights/developers/:username
+ * Retrieve individual developer activity details
+ */
+router.get('/developer-insights/developers/:username', async (req, res, next) => {
+  try {
+    const { username } = req.params;
+    const { owner, repo } = req.query;
+    const result = await getDeveloperWiseActivity({
+      owner,
+      repo,
+      developer: username,
+    });
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/github/developer-insights
+ * Retrieve Developer Insights overview (aliased to summary)
+ */
+router.get('/developer-insights', async (req, res, next) => {
+  try {
+    const { owner, repo, developer } = req.query;
+    const insights = await getTeamActivitySummary({ owner, repo, developer });
+    res.json({
+      success: true,
+      data: insights,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/github/app-verify
+ * Test and verify GitHub App configuration and connectivity
+ */
+router.get('/app-verify', async (req, res, next) => {
+  try {
+    const result = await verifyGitHubAppConnectivity();
+    res.json({
+      success: result.success,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 /**
  * GET /api/github/status

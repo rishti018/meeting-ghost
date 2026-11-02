@@ -18,7 +18,13 @@ import {
   ListChecks,
   ClipboardList,
   ExternalLink,
-  Sparkles
+  Sparkles,
+  Heart,
+  Smile,
+  ShieldAlert,
+  HelpCircle,
+  MessageSquare,
+  Activity,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { PriorityBadge } from '../components/StatusBadge';
@@ -316,9 +322,40 @@ export function MeetingDetail() {
 
       {/* Executive Summary Section */}
       <div className="ghost-panel p-5 space-y-3">
-        <span className="text-[10px] font-semibold text-ghost-secondary uppercase tracking-wider block">
-          Executive Summary
-        </span>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-ghost-border pb-2.5">
+          <span className="text-[10px] font-semibold text-ghost-secondary uppercase tracking-wider block">
+            Executive Summary
+          </span>
+          {meeting.sentiment?.conversationalTone && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-sm text-[11px] font-medium bg-[#EEF2FF] text-[#3730A3] border border-[#C7D2FE]">
+                <Activity className="w-3 h-3 text-[#5145CD]" />
+                <span>Tone: <strong>{meeting.sentiment.conversationalTone}</strong></span>
+              </span>
+              {meeting.sentiment.distribution && (
+                <div className="hidden md:flex items-center gap-1 text-[10px] font-mono">
+                  <span className="px-1.5 py-0.5 rounded-xs bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    Pos {meeting.sentiment.distribution.positive}%
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded-xs bg-slate-100 text-slate-700 border border-slate-200">
+                    Neu {meeting.sentiment.distribution.neutral}%
+                  </span>
+                  {meeting.sentiment.distribution.negative > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-xs bg-rose-50 text-rose-700 border border-rose-200">
+                      Neg {meeting.sentiment.distribution.negative}%
+                    </span>
+                  )}
+                  {meeting.sentiment.distribution.mixed > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-xs bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      Mix {meeting.sentiment.distribution.mixed}%
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         <p className="text-xs sm:text-sm text-ghost-text leading-relaxed font-medium">
           {meeting.summary}
         </p>
@@ -350,6 +387,187 @@ export function MeetingDetail() {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* Speaker Sentiment & Contextual Emotion Dynamics */}
+      {meeting.sentiment && (
+        <div className="ghost-panel p-5 space-y-4 bg-[#FFFFFF] border border-[#DCE2EB]">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#DCE2EB] pb-3">
+            <div>
+              <span className="text-xs font-semibold text-[#172033] uppercase tracking-wider flex items-center gap-1.5">
+                <Heart className="w-3.5 h-3.5 text-[#5145CD]" />
+                Speaker Sentiment & Emotion-Aware Intelligence
+              </span>
+              <p className="text-[11px] text-[#526078] mt-0.5">
+                Dialogue-grounded speaker dynamics, sentiment shifts, and contextual emotional signals
+              </p>
+            </div>
+            {meeting.sentiment.shifts && meeting.sentiment.shifts.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {meeting.sentiment.shifts.map((sh, sIdx) => (
+                  <span
+                    key={sIdx}
+                    className="text-[11px] text-[#526078] bg-[#F4F6FA] px-2 py-0.5 rounded-sm border border-[#DCE2EB]"
+                    title={sh.trigger ? `Trigger: ${sh.trigger}` : undefined}
+                  >
+                    <strong>{sh.fromStage} → {sh.toStage}:</strong> {sh.shiftDescription}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Speaker-wise Breakdown */}
+          {meeting.sentiment.speakers && meeting.sentiment.speakers.length > 0 && (
+            <div className="space-y-2">
+              <span className="text-[10px] font-semibold text-[#526078] uppercase tracking-wider block">
+                Speaker Sentiment Breakdown ({meeting.sentiment.speakers.length} Speakers)
+              </span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {meeting.sentiment.speakers.map((spk, idx) => {
+                  const sentimentColor =
+                    spk.overallSentiment === 'Positive'
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                      : spk.overallSentiment === 'Negative'
+                      ? 'bg-rose-50 text-rose-800 border-rose-200'
+                      : spk.overallSentiment === 'Mixed'
+                      ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                      : 'bg-slate-100 text-slate-800 border-slate-200';
+
+                  const speakerObs = (meeting.sentiment.observations || []).filter(
+                    o => o.speaker === spk.speaker && o.quote
+                  );
+                  const topObs = speakerObs[0];
+
+                  return (
+                    <div
+                      key={idx}
+                      className="p-3.5 rounded-sm bg-[#F8FAFC] border border-[#E2E8F0] space-y-2 text-xs"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-[#172033] flex items-center gap-1.5">
+                          <User className="w-3 h-3 text-[#526078]" />
+                          {spk.speaker}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-sm text-[10px] font-semibold uppercase tracking-wider border ${sentimentColor}`}>
+                          {spk.overallSentiment}
+                        </span>
+                      </div>
+
+                      <p className="text-[#526078] text-[11px] leading-relaxed">
+                        {spk.summary}
+                      </p>
+
+                      {spk.emotionalSignals && spk.emotionalSignals.length > 0 && spk.emotionalSignals[0] !== 'None' && (
+                        <div className="flex flex-wrap items-center gap-1 pt-1">
+                          {spk.emotionalSignals.map((signal, sIdx) => {
+                            let badgeStyle = 'bg-slate-100 text-slate-700 border-slate-200';
+                            if (signal === 'Enthusiasm') badgeStyle = 'bg-purple-50 text-purple-700 border-purple-200';
+                            if (signal === 'Confidence') badgeStyle = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                            if (signal === 'Uncertainty') badgeStyle = 'bg-amber-50 text-amber-700 border-amber-200';
+                            if (signal === 'Frustration') badgeStyle = 'bg-rose-50 text-rose-700 border-rose-200';
+                            if (signal === 'Concern') badgeStyle = 'bg-orange-50 text-orange-800 border-orange-200';
+                            if (signal === 'Disagreement') badgeStyle = 'bg-red-50 text-red-700 border-red-200';
+
+                            return (
+                              <span
+                                key={sIdx}
+                                className={`px-1.5 py-0.5 rounded-xs text-[10px] font-medium border ${badgeStyle}`}
+                              >
+                                {signal}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Grounded Evidence Citation */}
+                      {topObs && (
+                        <div className="pt-1.5 border-t border-[#E2E8F0]">
+                          <span className="text-[10px] text-[#526078] font-mono block">
+                            Evidence {topObs.segment && `(${topObs.segment})`} • Confidence: {topObs.confidence || 'Medium'}
+                          </span>
+                          <blockquote className="text-[11px] italic text-[#172033] border-l-2 border-[#5145CD] pl-2 mt-0.5">
+                            "{topObs.quote}"
+                          </blockquote>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Important Moments */}
+          {meeting.sentiment.keyMoments && meeting.sentiment.keyMoments.length > 0 && (
+            <div className="pt-2 space-y-2 border-t border-[#DCE2EB]">
+              <span className="text-[10px] font-semibold text-[#526078] uppercase tracking-wider block">
+                Key Discussion Moments & Divergence ({meeting.sentiment.keyMoments.length} Captured)
+              </span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                {meeting.sentiment.keyMoments.slice(0, 6).map((km, idx) => {
+                  let badge = 'bg-slate-100 text-slate-700 border-slate-200';
+                  if (km.type === 'Agreement') badge = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                  if (km.type === 'Concern') badge = 'bg-amber-50 text-amber-800 border-amber-300';
+                  if (km.type === 'Uncertainty') badge = 'bg-indigo-50 text-indigo-700 border-indigo-200';
+                  if (km.type === 'Disagreement') badge = 'bg-rose-50 text-rose-700 border-rose-200';
+
+                  return (
+                    <div
+                      key={idx}
+                      className="p-2.5 rounded-sm bg-[#F4F6FA] border border-[#DCE2EB] text-xs space-y-1"
+                    >
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className={`px-1.5 py-0.5 rounded-xs font-semibold uppercase tracking-wider border ${badge}`}>
+                          {km.type}
+                        </span>
+                        <span className="font-mono text-[#526078]">{km.speaker} {km.segment && `• ${km.segment}`}</span>
+                      </div>
+                      <blockquote className="italic text-[#172033] border-l-2 border-[#C7D2FE] pl-2 text-[11px] my-1">
+                        "{km.quote}"
+                      </blockquote>
+                      <p className="text-[11px] text-[#526078]">{km.context}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Emotion-Aware AI Suggestions */}
+          {meeting.sentiment.suggestions && meeting.sentiment.suggestions.length > 0 && (
+            <div className="pt-2 space-y-2 border-t border-[#DCE2EB]">
+              <span className="text-[10px] font-semibold text-[#526078] uppercase tracking-wider flex items-center gap-1">
+                <HelpCircle className="w-3 h-3 text-[#5145CD]" />
+                Emotion-Aware Follow-Up Suggestions ({meeting.sentiment.suggestions.length})
+              </span>
+              <div className="space-y-2">
+                {meeting.sentiment.suggestions.map((sug, idx) => (
+                  <div
+                    key={idx}
+                    className="p-3 rounded-sm bg-[#EEF2FF]/40 border border-[#C7D2FE] text-xs space-y-1"
+                  >
+                    <div className="font-semibold text-[#1E1B4B] flex items-start gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#5145CD] mt-1.5 shrink-0" />
+                      <span>{sug.recommendedAction}</span>
+                    </div>
+                    {sug.trigger && (
+                      <p className="text-[11px] text-[#4338CA] pl-3">
+                        <strong>Observed Context: </strong>{sug.trigger}
+                      </p>
+                    )}
+                    {sug.rationale && (
+                      <p className="text-[11px] text-[#526078] pl-3 leading-relaxed">
+                        <strong>Rationale: </strong>{sug.rationale}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

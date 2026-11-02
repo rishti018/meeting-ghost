@@ -76,10 +76,30 @@ app.use('/api/*', (req, res) => {
 
 // Centralized error handling
 app.use((err, req, res, next) => {
-  console.error('[ServerError]', err.stack || err.message);
-  const status = err.status || (err.name === 'ValidationError' ? 400 : 500);
+  const isDbErr = err.status === 503 ||
+    err.name?.startsWith('Mongo') ||
+    err.name?.startsWith('Mongoose') ||
+    err.message?.includes('buffering timed out') ||
+    err.message?.includes('Database not connected') ||
+    err.message?.includes('IP Access List') ||
+    err.message?.includes('whitelist') ||
+    err.message?.includes('SSL alert number 80') ||
+    err.message?.includes('Topology is closed');
+
+  const status = err.status || (isDbErr ? 503 : (err.name === 'ValidationError' ? 400 : 500));
+
+  if (status >= 500) {
+    console.error('[ServerError]', err.stack || err.message);
+  } else if (status === 503) {
+    console.warn(`[ServiceNotice] (503): ${err.message}`);
+  } else {
+    console.warn(`[ClientNotice] (${status}): ${err.message}`);
+  }
+
   res.status(status).json({
-    error: err.message || 'Internal server error occurred.',
+    error: err.message || (status === 503 ? 'Database service temporarily unavailable. Please check MongoDB Atlas connection.' : 'Internal server error occurred.'),
+    ...(err.category ? { category: err.category } : (isDbErr ? { category: 'DATABASE_UNAVAILABLE' } : {})),
+    connected: !isDbErr,
   });
 });
 

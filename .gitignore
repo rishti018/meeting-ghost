@@ -10,6 +10,11 @@ node_modules/
 *.env
 !.env.example
 !server/.env.example
+*.pem
+*.key
+certs/
+server/certs/
+secrets/
 
 # Build outputs
 dist/

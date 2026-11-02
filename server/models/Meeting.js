@@ -86,6 +86,90 @@ const momSchema = new mongoose.Schema({
   isEdited: { type: Boolean, default: false },
 }, { _id: false });
 
+const speakerObservationSchema = new mongoose.Schema({
+  speaker: { type: String, default: 'Unknown Speaker' },
+  segment: { type: String, default: '' },
+  sentiment: {
+    type: String,
+    enum: ['Positive', 'Neutral', 'Negative', 'Mixed'],
+    default: 'Neutral',
+  },
+  emotionalSignal: {
+    type: String,
+    enum: ['Enthusiasm', 'Confidence', 'Uncertainty', 'Frustration', 'Concern', 'Disagreement', 'None', 'Insufficient Evidence'],
+    default: 'None',
+  },
+  quote: { type: String, default: '' },
+  explanation: { type: String, default: '' },
+  confidence: {
+    type: String,
+    enum: ['High', 'Medium', 'Low', 'Unknown'],
+    default: 'Medium',
+  },
+}, { _id: false });
+
+const speakerSummarySchema = new mongoose.Schema({
+  speaker: { type: String, default: 'Unknown Speaker' },
+  overallSentiment: {
+    type: String,
+    enum: ['Positive', 'Neutral', 'Negative', 'Mixed'],
+    default: 'Neutral',
+  },
+  emotionalSignals: { type: [String], default: [] },
+  observationCount: { type: Number, default: 0 },
+  summary: { type: String, default: '' },
+}, { _id: false });
+
+const sentimentDistributionSchema = new mongoose.Schema({
+  positive: { type: Number, default: 0 },
+  neutral: { type: Number, default: 0 },
+  negative: { type: Number, default: 0 },
+  mixed: { type: Number, default: 0 },
+}, { _id: false });
+
+const sentimentShiftSchema = new mongoose.Schema({
+  fromStage: { type: String, default: '' },
+  toStage: { type: String, default: '' },
+  shiftDescription: { type: String, default: '' },
+  trigger: { type: String, default: '' },
+}, { _id: false });
+
+const keyMomentSchema = new mongoose.Schema({
+  type: {
+    type: String,
+    enum: ['Agreement', 'Concern', 'Uncertainty', 'Disagreement'],
+    default: 'Agreement',
+  },
+  speaker: { type: String, default: 'Unknown Speaker' },
+  segment: { type: String, default: '' },
+  quote: { type: String, default: '' },
+  context: { type: String, default: '' },
+}, { _id: false });
+
+const emotionSuggestionSchema = new mongoose.Schema({
+  trigger: { type: String, default: '' },
+  quote: { type: String, default: '' },
+  recommendedAction: { type: String, default: '' },
+  rationale: { type: String, default: '' },
+}, { _id: false });
+
+const sentimentSchema = new mongoose.Schema({
+  conversationalTone: { type: String, default: 'Constructive & Collaborative' },
+  overallSentiment: {
+    type: String,
+    enum: ['Positive', 'Neutral', 'Negative', 'Mixed'],
+    default: 'Neutral',
+  },
+  distribution: { type: sentimentDistributionSchema, default: () => ({ positive: 0, neutral: 100, negative: 0, mixed: 0 }) },
+  speakers: { type: [speakerSummarySchema], default: [] },
+  observations: { type: [speakerObservationSchema], default: [] },
+  shifts: { type: [sentimentShiftSchema], default: [] },
+  keyMoments: { type: [keyMomentSchema], default: [] },
+  suggestions: { type: [emotionSuggestionSchema], default: [] },
+  generatedAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+}, { _id: false });
+
 const meetingSchema = new mongoose.Schema({
   title: {
     type: String,
@@ -135,6 +219,10 @@ const meetingSchema = new mongoose.Schema({
   },
   mom: {
     type: momSchema,
+    default: null,
+  },
+  sentiment: {
+    type: sentimentSchema,
     default: null,
   },
   isDemo: {

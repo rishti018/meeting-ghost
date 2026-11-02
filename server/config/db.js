@@ -231,6 +231,23 @@ export function isDbConnected() {
 }
 
 /**
+ * Ensures a live database connection is established or attempts reconnect.
+ * Throws a clean 503 Service Unavailable error if database is unreachable.
+ */
+export async function ensureConnected() {
+  if (!isDbConnected()) {
+    await connectToDatabase();
+  }
+  if (!isDbConnected()) {
+    const diag = getLastDiagnostic();
+    const error = new Error(diag?.message || 'Database not connected. Please verify your MongoDB Atlas connection.');
+    error.status = 503;
+    error.category = diag?.category || 'DATABASE_UNAVAILABLE';
+    throw error;
+  }
+}
+
+/**
  * Active health check testing connectivity with ping
  */
 export async function checkDatabaseHealth() {

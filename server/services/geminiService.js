@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { config } from '../config/env.js';
+import { analyzeSpeakerSentiment, extractSentimentWithRuleFallback as extractSentimentFallback } from './sentimentService.js';
 
 let genAIClient = null;
 
@@ -207,9 +208,34 @@ export function extractWithRuleFallback(transcript, providedTitle, providedDate)
     }
   }
 
+  // Grounded emotion-aware intelligence extraction
+  let sentiment = null;
+  try {
+    sentiment = extractSentimentFallback({
+      transcript: text,
+      title,
+      meetingDate: providedDate,
+    });
+  } catch (_) {}
+
+  // Weave emotion-aware suggestions into follow-up agenda if present
+  if (sentiment?.suggestions?.length > 0) {
+    const existingAgendaLower = new Set(followUpAgenda.map(a => a.toLowerCase()));
+    for (const sug of sentiment.suggestions) {
+      if (sug.recommendedAction && !existingAgendaLower.has(sug.recommendedAction.toLowerCase())) {
+        followUpAgenda.push(sug.recommendedAction);
+        existingAgendaLower.add(sug.recommendedAction.toLowerCase());
+      }
+    }
+  }
+
+  const toneContext = sentiment?.conversationalTone
+    ? ` Conversational tone was identified as ${sentiment.conversationalTone.toLowerCase()}.`
+    : '';
+
   const summary = `The meeting covered ${actionItems.length} action item(s) and ${decisions.length} confirmed decision(s). Key responsibilities were allocated and follow-up priorities established.`;
 
-  const detailedSummary = `In this session, participants aligned on core deliverables and project architectural choices. ${
+  const detailedSummary = `In this session, participants aligned on core deliverables and project architectural choices.${toneContext} ${
     actionItems.map(a => `${a.owner} committed to ${a.task.toLowerCase()} (Deadline: ${a.deadline})`).join('. ')
   }. ${
     decisions.map(d => `The team confirmed: "${d.decision}" (${d.rationale})`).join('. ')
@@ -226,6 +252,7 @@ export function extractWithRuleFallback(transcript, providedTitle, providedDate)
     decisions,
     followUpAgenda: followUpAgenda.length > 0 ? followUpAgenda : ['Review milestone progress in next meeting'],
     transcript: text,
+    sentiment,
   };
 }
 
@@ -321,6 +348,7 @@ export function validateAndSanitizeOutput(data, rawTranscript, providedTitle, pr
     decisions,
     followUpAgenda: followUpAgenda.length > 0 ? followUpAgenda : ['Review action items in next check-in'],
     transcript: (rawTranscript || '').trim(),
+    sentiment: data.sentiment || null,
   };
 }
 
@@ -452,7 +480,42 @@ ${transcript}
       const cleanedText = textResponse.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
       const parsedData = JSON.parse(cleanedText);
 
-      return validateAndSanitizeOutput(parsedData, transcript, title, meetingDate);
+      const validated = validateAndSanitizeOutput(parsedData, transcript, title, meetingDate);
+
+      // Emotion-aware intelligence integration: analyze conversational tone & speaker emotional signals
+      let sentimentData = null;
+      try {
+        sentimentData = await analyzeSpeakerSentiment({
+          transcript,
+          title: validated.title,
+          meetingDate,
+          preparation,
+          existingIntel: validated,
+        });
+      } catch (sentimentErr) {
+        console.warn(`[GeminiService] Live sentiment analysis notice: ${sentimentErr.message}. Using rule fallback.`);
+        sentimentData = extractSentimentFallback({
+          transcript,
+          title: validated.title,
+          meetingDate,
+          preparation,
+          existingIntel: validated,
+        });
+      }
+
+      // Weave emotion-aware suggestions into follow-up agenda if not already present
+      if (sentimentData?.suggestions?.length > 0) {
+        const existingAgendaLower = new Set(validated.followUpAgenda.map(a => a.toLowerCase()));
+        for (const sug of sentimentData.suggestions) {
+          if (sug.recommendedAction && !existingAgendaLower.has(sug.recommendedAction.toLowerCase())) {
+            validated.followUpAgenda.push(sug.recommendedAction);
+            existingAgendaLower.add(sug.recommendedAction.toLowerCase());
+          }
+        }
+      }
+
+      validated.sentiment = sentimentData;
+      return validated;
     } catch (err) {
       lastError = err;
       console.warn(`[GeminiService] Model ${modelName} notice: ${err.message?.slice(0, 100)}`);

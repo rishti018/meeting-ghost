@@ -1,7 +1,16 @@
 import mongoose from 'mongoose';
 import { Integration } from '../models/Integration.js';
 import { Task } from '../models/Task.js';
-import { isDbConnected } from '../config/db.js';
+import { isDbConnected, ensureConnected } from '../config/db.js';
+import { config } from '../config/env.js';
+import {
+  getInstallationAccessToken,
+  getInstallationRepositories,
+  getInstallationDetails,
+  verifyGitHubAppConnectivity,
+} from './githubAppAuth.js';
+
+export { verifyGitHubAppConnectivity };
 
 const GITHUB_API_BASE = 'https://api.github.com';
 const USER_AGENT = 'MeetingGhost-Platform/1.0';
@@ -10,11 +19,26 @@ const USER_AGENT = 'MeetingGhost-Platform/1.0';
 let inMemoryIntegration = null;
 
 /**
- * Retrieve GitHub access token and connection information from MongoDB or environment variables.
+ * Retrieve GitHub access token and connection information from GitHub App, MongoDB or environment variables.
  * Token is NEVER exposed to client.
  */
 export async function getActiveGitHubToken() {
-  // 1. Check MongoDB Integration collection if DB is connected
+  // 1. Check configured GitHub App first (recommended secure app-based integration)
+  if (config.githubApp?.isConfigured) {
+    try {
+      const appToken = await getInstallationAccessToken();
+      return {
+        token: appToken,
+        authMode: 'github_app',
+        username: '',
+        profile: null,
+      };
+    } catch (err) {
+      console.warn('[GitHubService] GitHub App token retrieval notice:', err.message);
+    }
+  }
+
+  // 2. Check MongoDB Integration collection if DB is connected
   if (isDbConnected()) {
     try {
       const integration = await Integration.findOne({ provider: 'github' }).select('+accessToken');
@@ -240,6 +264,36 @@ export async function disconnectGitHubAccount() {
  * Get current GitHub connection status
  */
 export async function getGitHubStatus() {
+  // If GitHub App is configured, retrieve installation details and authorized repository metrics
+  if (config.githubApp?.isConfigured) {
+    try {
+      const installDetails = await getInstallationDetails();
+      const repoData = await getInstallationRepositories({ perPage: 10 });
+      return {
+        connected: true,
+        authMode: 'github_app',
+        appId: config.githubApp.appId,
+        installationId: config.githubApp.installationId,
+        username: installDetails.account?.login || 'GitHub App',
+        displayName: installDetails.account?.login || 'GitHub App',
+        avatarUrl: installDetails.account?.avatarUrl || '',
+        profileUrl: installDetails.account?.htmlUrl || '',
+        repositorySelection: installDetails.repositorySelection,
+        publicRepos: repoData.totalCount,
+        authorizedReposCount: repoData.totalCount,
+        connectedAt: installDetails.createdAt || new Date(),
+      };
+    } catch (err) {
+      return {
+        connected: false,
+        authMode: 'github_app',
+        error: `GitHub App verification notice: ${err.message}`,
+        appId: config.githubApp.appId,
+        installationId: config.githubApp.installationId,
+      };
+    }
+  }
+
   const activeAuth = await getActiveGitHubToken();
 
   if (!activeAuth?.token) {
@@ -279,6 +333,16 @@ export async function getGitHubStatus() {
  * List repositories accessible to the connected user
  */
 export async function listUserRepositories({ perPage = 50 } = {}) {
+  // If GitHub App is configured, return strictly authorized repositories
+  if (config.githubApp?.isConfigured) {
+    try {
+      const repoData = await getInstallationRepositories({ perPage });
+      return repoData.repositories;
+    } catch (err) {
+      console.warn('[GitHubService] GitHub App repo listing fallback:', err.message);
+    }
+  }
+
   const activeAuth = await getActiveGitHubToken();
 
   if (activeAuth?.token) {
@@ -425,17 +489,19 @@ export async function linkTaskToGitHub(taskId, {
   issueNumber,
   resourceType = 'issue',
 }) {
-  if (!isDbConnected()) {
-    throw new Error('Database is not connected. Please verify your MongoDB connection to link tasks.');
-  }
+  await ensureConnected();
 
   if (!mongoose.Types.ObjectId.isValid(taskId)) {
-    throw new Error('Invalid task ID format.');
+    const err = new Error('Invalid task ID format.');
+    err.status = 400;
+    throw err;
   }
 
   const task = await Task.findById(taskId);
   if (!task) {
-    throw new Error('Task not found.');
+    const err = new Error('Task not found.');
+    err.status = 404;
+    throw err;
   }
 
   if (!repoOwner || !repoName) {
@@ -450,8 +516,10 @@ export async function linkTaskToGitHub(taskId, {
     try {
       liveDetails = await getIssueOrPrDetails(repoOwner, repoName, issueNumber);
     } catch (err) {
-      syncStatus = 'error';
-      syncError = err.message;
+      const status = err.status || (err.message.includes('404') ? 404 : 400);
+      const customErr = new Error(`Issue or Pull Request #${issueNumber} not found in repository ${repoOwner}/${repoName}. Please verify the issue exists on GitHub or link the repository directly.`);
+      customErr.status = status;
+      throw customErr;
     }
   }
 
@@ -459,10 +527,10 @@ export async function linkTaskToGitHub(taskId, {
     repoOwner: repoOwner.trim(),
     repoName: repoName.trim(),
     repoFullName: `${repoOwner.trim()}/${repoName.trim()}`,
-    resourceType: liveDetails?.isPullRequest ? 'pull_request' : resourceType,
+    resourceType: liveDetails ? (liveDetails.isPullRequest ? 'pull_request' : 'issue') : 'repository',
     issueNumber: issueNumber ? parseInt(issueNumber, 10) : null,
     issueTitle: liveDetails?.title || '',
-    issueState: liveDetails?.state || 'open',
+    issueState: liveDetails?.state || (issueNumber ? 'open' : ''),
     htmlUrl: liveDetails?.htmlUrl || `https://github.com/${repoOwner.trim()}/${repoName.trim()}`,
     assignee: liveDetails?.assignee || '',
     checklistTotal: liveDetails?.checklistTotal || 0,
@@ -486,17 +554,19 @@ export async function linkTaskToGitHub(taskId, {
  * Unlink GitHub resource from task
  */
 export async function unlinkTaskFromGitHub(taskId) {
-  if (!isDbConnected()) {
-    throw new Error('Database is not connected. Please verify your MongoDB connection.');
-  }
+  await ensureConnected();
 
   if (!mongoose.Types.ObjectId.isValid(taskId)) {
-    throw new Error('Invalid task ID format.');
+    const err = new Error('Invalid task ID format.');
+    err.status = 400;
+    throw err;
   }
 
   const task = await Task.findById(taskId);
   if (!task) {
-    throw new Error('Task not found.');
+    const err = new Error('Task not found.');
+    err.status = 404;
+    throw err;
   }
 
   task.github = null;
@@ -508,15 +578,20 @@ export async function unlinkTaskFromGitHub(taskId) {
  * Synchronize all linked GitHub tasks or a single task
  */
 export async function syncTaskWithGitHub(taskId) {
-  if (!isDbConnected()) {
-    throw new Error('Database is not connected. Please verify your MongoDB connection.');
-  }
+  await ensureConnected();
 
   if (!mongoose.Types.ObjectId.isValid(taskId)) {
-    throw new Error('Invalid task ID format.');
+    const err = new Error('Invalid task ID format.');
+    err.status = 400;
+    throw err;
   }
 
   const task = await Task.findById(taskId);
+  if (!task) {
+    const err = new Error('Task not found.');
+    err.status = 404;
+    throw err;
+  }
   if (!task) {
     throw new Error('Task not found.');
   }
@@ -526,7 +601,13 @@ export async function syncTaskWithGitHub(taskId) {
   }
 
   const { repoOwner, repoName, issueNumber } = task.github;
-  if (!issueNumber) return task.toObject();
+  if (!issueNumber) {
+    task.github.syncStatus = 'synced';
+    task.github.syncError = '';
+    task.github.lastSyncedAt = new Date();
+    await task.save();
+    return task.toObject();
+  }
 
   try {
     const live = await getIssueOrPrDetails(repoOwner, repoName, issueNumber);
@@ -546,9 +627,634 @@ export async function syncTaskWithGitHub(taskId) {
     await task.save();
   } catch (err) {
     task.github.syncStatus = 'error';
-    task.github.syncError = err.message;
+    task.github.syncError = err.message.includes('404')
+      ? `Issue #${issueNumber} not found on GitHub in ${repoOwner}/${repoName}`
+      : `Sync error: ${err.message}`;
+    task.github.lastSyncedAt = new Date();
     await task.save();
   }
 
   return task.toObject();
+}
+
+/**
+ * Resolves target repository owner and repo name from parameters or defaults to first accessible repo.
+ */
+export async function resolveTargetRepo(targetOwner, targetRepo) {
+  let owner = targetOwner?.trim();
+  let repo = targetRepo?.trim();
+
+  if (!owner || !repo) {
+    const repos = await listUserRepositories({ perPage: 1 });
+    if (repos && repos.length > 0) {
+      owner = repos[0].owner;
+      repo = repos[0].name;
+    } else {
+      const err = new Error('No accessible GitHub repositories found. Please verify your GitHub App configuration.');
+      err.status = 404;
+      throw err;
+    }
+  }
+
+  return { owner, repo };
+}
+
+/**
+ * Retrieve recent commits with author, message, branch, and date from GitHub.
+ */
+export async function getRecentCommits({
+  owner: targetOwner,
+  repo: targetRepo,
+  branch,
+  limit = 30,
+  page = 1,
+  author,
+} = {}) {
+  const { owner, repo } = await resolveTargetRepo(targetOwner, targetRepo);
+  const parsedLimit = Math.min(Math.max(1, parseInt(limit, 10) || 30), 100);
+  const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+
+  let query = `per_page=${parsedLimit}&page=${parsedPage}`;
+  if (branch && branch.trim()) query += `&sha=${encodeURIComponent(branch.trim())}`;
+  if (author && author.trim()) query += `&author=${encodeURIComponent(author.trim())}`;
+
+  let rawCommits = [];
+  try {
+    rawCommits = await callGitHubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits?${query}`);
+    if (!Array.isArray(rawCommits)) rawCommits = [];
+  } catch (err) {
+    if (err.status === 409 || err.message?.includes('Git Repository is empty')) {
+      return {
+        repository: { owner, name: repo, fullName: `${owner}/${repo}` },
+        branch: branch || null,
+        commits: [],
+        isEmpty: true,
+        pagination: {
+          page: parsedPage,
+          limit: parsedLimit,
+          totalFetched: 0,
+          hasMore: false,
+        },
+      };
+    }
+    const error = new Error(`Failed to load commits for ${owner}/${repo}: ${err.message}`);
+    error.status = err.status || 500;
+    throw error;
+  }
+
+  const commits = rawCommits.map(c => {
+    const login = c.author?.login || null;
+    const authorName = c.commit?.author?.name || c.author?.login || 'Unknown Author';
+    const isBot = c.author?.type === 'Bot' || Boolean(login && (login.includes('[bot]') || login.endsWith('-bot')));
+
+    return {
+      sha: c.sha,
+      shortSha: c.sha ? c.sha.substring(0, 7) : '',
+      message: c.commit?.message || '',
+      headline: c.commit?.message ? c.commit.message.split('\n')[0] : '',
+      branch: branch || null,
+      date: c.commit?.author?.date || c.commit?.committer?.date || null,
+      author: {
+        login,
+        name: authorName,
+        email: c.commit?.author?.email || null,
+        avatarUrl: c.author?.avatar_url || '',
+        profileUrl: c.author?.html_url || (login ? `https://github.com/${login}` : ''),
+        isBot,
+      },
+      committer: {
+        name: c.commit?.committer?.name || null,
+        date: c.commit?.committer?.date || null,
+      },
+      htmlUrl: c.html_url || '',
+    };
+  });
+
+  return {
+    repository: { owner, name: repo, fullName: `${owner}/${repo}` },
+    branch: branch || null,
+    commits,
+    isEmpty: commits.length === 0 && parsedPage === 1,
+    pagination: {
+      page: parsedPage,
+      limit: parsedLimit,
+      totalFetched: commits.length,
+      hasMore: commits.length === parsedLimit,
+    },
+  };
+}
+
+/**
+ * Retrieve repository pull requests with author, title, state, and merged status.
+ */
+export async function getRepositoryPullRequests({
+  owner: targetOwner,
+  repo: targetRepo,
+  state = 'all',
+  limit = 30,
+  page = 1,
+  author,
+} = {}) {
+  const { owner, repo } = await resolveTargetRepo(targetOwner, targetRepo);
+  const parsedLimit = Math.min(Math.max(1, parseInt(limit, 10) || 30), 100);
+  const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+  const validState = ['all', 'open', 'closed'].includes(state?.toLowerCase()) ? state.toLowerCase() : 'all';
+
+  let rawPulls = [];
+  try {
+    rawPulls = await callGitHubApi(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=${validState}&per_page=${parsedLimit}&page=${parsedPage}`
+    );
+    if (!Array.isArray(rawPulls)) rawPulls = [];
+  } catch (err) {
+    if (err.status === 409 || err.message?.includes('Git Repository is empty')) {
+      return {
+        repository: { owner, name: repo, fullName: `${owner}/${repo}` },
+        pullRequests: [],
+        pagination: { page: parsedPage, limit: parsedLimit, totalFetched: 0, hasMore: false },
+      };
+    }
+    const error = new Error(`Failed to load pull requests for ${owner}/${repo}: ${err.message}`);
+    error.status = err.status || 500;
+    throw error;
+  }
+
+  let filtered = rawPulls;
+  if (author && author.trim()) {
+    const authorFilter = author.trim().toLowerCase();
+    filtered = filtered.filter(p => p.user?.login?.toLowerCase() === authorFilter);
+  }
+
+  const pullRequests = filtered.map(p => {
+    const login = p.user?.login || null;
+    const authorName = p.user?.name || login || 'Unknown Contributor';
+    const isBot = p.user?.type === 'Bot' || Boolean(login && (login.includes('[bot]') || login.endsWith('-bot')));
+
+    return {
+      id: p.id,
+      number: p.number,
+      title: p.title || '',
+      state: p.state, // 'open' | 'closed'
+      isMerged: Boolean(p.merged_at),
+      mergedAt: p.merged_at || null,
+      headBranch: p.head?.ref || '',
+      baseBranch: p.base?.ref || '',
+      author: {
+        login,
+        name: authorName,
+        avatarUrl: p.user?.avatar_url || '',
+        profileUrl: p.user?.html_url || (login ? `https://github.com/${login}` : ''),
+        isBot,
+      },
+      assignees: (p.assignees || []).map(a => ({
+        login: a.login,
+        avatarUrl: a.avatar_url || '',
+      })),
+      createdAt: p.created_at,
+      updatedAt: p.updated_at,
+      closedAt: p.closed_at || null,
+      htmlUrl: p.html_url || '',
+    };
+  });
+
+  return {
+    repository: { owner, name: repo, fullName: `${owner}/${repo}` },
+    pullRequests,
+    pagination: {
+      page: parsedPage,
+      limit: parsedLimit,
+      totalFetched: pullRequests.length,
+      hasMore: rawPulls.length === parsedLimit,
+    },
+  };
+}
+
+/**
+ * Retrieve repository issues with assignee, state, creation/update dates, excluding pull requests.
+ */
+export async function getRepositoryIssues({
+  owner: targetOwner,
+  repo: targetRepo,
+  state = 'all',
+  limit = 30,
+  page = 1,
+  assignee,
+  author,
+} = {}) {
+  const { owner, repo } = await resolveTargetRepo(targetOwner, targetRepo);
+  const parsedLimit = Math.min(Math.max(1, parseInt(limit, 10) || 30), 100);
+  const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+  const validState = ['all', 'open', 'closed'].includes(state?.toLowerCase()) ? state.toLowerCase() : 'all';
+
+  let query = `state=${validState}&per_page=${parsedLimit}&page=${parsedPage}`;
+  if (assignee && assignee.trim()) query += `&assignee=${encodeURIComponent(assignee.trim())}`;
+  if (author && author.trim()) query += `&creator=${encodeURIComponent(author.trim())}`;
+
+  let rawIssuesAndPrs = [];
+  try {
+    rawIssuesAndPrs = await callGitHubApi(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?${query}`
+    );
+    if (!Array.isArray(rawIssuesAndPrs)) rawIssuesAndPrs = [];
+  } catch (err) {
+    if (err.status === 409 || err.message?.includes('Git Repository is empty')) {
+      return {
+        repository: { owner, name: repo, fullName: `${owner}/${repo}` },
+        issues: [],
+        pagination: { page: parsedPage, limit: parsedLimit, totalFetched: 0, hasMore: false },
+      };
+    }
+    const error = new Error(`Failed to load issues for ${owner}/${repo}: ${err.message}`);
+    error.status = err.status || 500;
+    throw error;
+  }
+
+  // GitHub returns PRs in the issues endpoint; filter them out
+  const rawIssues = rawIssuesAndPrs.filter(item => !item.pull_request);
+
+  const issues = rawIssues.map(i => {
+    const login = i.user?.login || null;
+    const authorName = i.user?.name || login || 'Unknown Creator';
+    const isBot = i.user?.type === 'Bot' || Boolean(login && (login.includes('[bot]') || login.endsWith('-bot')));
+
+    return {
+      id: i.id,
+      number: i.number,
+      title: i.title || '',
+      state: i.state, // 'open' | 'closed'
+      author: {
+        login,
+        name: authorName,
+        avatarUrl: i.user?.avatar_url || '',
+        profileUrl: i.user?.html_url || (login ? `https://github.com/${login}` : ''),
+        isBot,
+      },
+      assignee: i.assignee ? {
+        login: i.assignee.login,
+        avatarUrl: i.assignee.avatar_url || '',
+      } : null,
+      assignees: (i.assignees || []).map(a => ({
+        login: a.login,
+        avatarUrl: a.avatar_url || '',
+      })),
+      labels: (i.labels || []).map(l => ({
+        name: typeof l === 'string' ? l : l.name,
+        color: typeof l === 'string' ? 'gray' : l.color,
+      })),
+      commentsCount: i.comments || 0,
+      createdAt: i.created_at,
+      updatedAt: i.updated_at,
+      closedAt: i.closed_at || null,
+      htmlUrl: i.html_url || '',
+    };
+  });
+
+  return {
+    repository: { owner, name: repo, fullName: `${owner}/${repo}` },
+    issues,
+    pagination: {
+      page: parsedPage,
+      limit: parsedLimit,
+      totalFetched: issues.length,
+      hasMore: rawIssuesAndPrs.length === parsedLimit,
+    },
+  };
+}
+
+/**
+ * Retrieve comprehensive Developer Insights from GitHub for a connected repository.
+ * Aggregates Team Overview metrics, developer grouping, and recent activity.
+ * Does NOT convert commit metrics into task completion percentages.
+ */
+export async function getDeveloperInsights(targetOwner, targetRepo) {
+  const { owner, repo } = await resolveTargetRepo(targetOwner, targetRepo);
+
+  // 1. Fetch Repository Metadata
+  let repoMeta = null;
+  try {
+    repoMeta = await callGitHubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+  } catch (err) {
+    const error = new Error(`Failed to load repository ${owner}/${repo}: ${err.message}`);
+    error.status = err.status || 500;
+    throw error;
+  }
+
+  // 2. Fetch Commits (up to 100 recent)
+  let rawCommits = [];
+  try {
+    rawCommits = await callGitHubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits?per_page=100`);
+    if (!Array.isArray(rawCommits)) rawCommits = [];
+  } catch (err) {
+    console.warn(`[DeveloperInsights] Commit fetch notice for ${owner}/${repo}:`, err.message);
+    rawCommits = [];
+  }
+
+  // 3. Fetch Pull Requests (up to 100, all states)
+  let rawPulls = [];
+  try {
+    rawPulls = await callGitHubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=all&per_page=100`);
+    if (!Array.isArray(rawPulls)) rawPulls = [];
+  } catch (err) {
+    console.warn(`[DeveloperInsights] Pull requests fetch notice for ${owner}/${repo}:`, err.message);
+    rawPulls = [];
+  }
+
+  // 4. Fetch Issues (up to 100, all states)
+  let rawIssuesAndPrs = [];
+  try {
+    rawIssuesAndPrs = await callGitHubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?state=all&per_page=100`);
+    if (!Array.isArray(rawIssuesAndPrs)) rawIssuesAndPrs = [];
+  } catch (err) {
+    console.warn(`[DeveloperInsights] Issues fetch notice for ${owner}/${repo}:`, err.message);
+    rawIssuesAndPrs = [];
+  }
+
+  // Separate true issues from pull requests (GitHub issues API includes PRs)
+  const rawIssues = rawIssuesAndPrs.filter(item => !item.pull_request);
+
+  // --- Aggregate Pull Request Metrics ---
+  const prsOpened = rawPulls.length;
+  const prsMerged = rawPulls.filter(p => Boolean(p.merged_at)).length;
+  const prsOpen = rawPulls.filter(p => p.state === 'open').length;
+  const prsClosed = rawPulls.filter(p => p.state === 'closed' && !p.merged_at).length;
+
+  // --- Aggregate Issue Metrics ---
+  const issuesTotal = rawIssues.length;
+  const issuesOpen = rawIssues.filter(i => i.state === 'open').length;
+  const issuesClosed = rawIssues.filter(i => i.state === 'closed').length;
+
+  // --- Group Developer Activity by Username ---
+  const developerMap = new Map();
+
+  function getOrCreateDev(login, fallbackName, avatarUrl, profileUrl, isBot = false) {
+    const key = (login || fallbackName || 'Unknown Developer').toLowerCase();
+    if (!developerMap.has(key)) {
+      developerMap.set(key, {
+        username: login || fallbackName || 'Unknown',
+        displayName: fallbackName || login || 'Unknown Developer',
+        avatarUrl: avatarUrl || '',
+        profileUrl: profileUrl || (login ? `https://github.com/${login}` : ''),
+        isBot: Boolean(isBot || (login && (login.includes('[bot]') || login.endsWith('-bot') || login === 'github-actions'))),
+        commitCount: 0,
+        prsOpenedCount: 0,
+        prsMergedCount: 0,
+        issuesCreatedCount: 0,
+        lastActiveDate: null,
+        recentCommits: [],
+        recentPrs: [],
+        recentIssues: [],
+      });
+    }
+    return developerMap.get(key);
+  }
+
+  // Process Commits
+  for (const c of rawCommits) {
+    const login = c.author?.login || null;
+    const authorName = c.commit?.author?.name || c.author?.name || 'Unknown Author';
+    const avatarUrl = c.author?.avatar_url || '';
+    const profileUrl = c.author?.html_url || '';
+    const isBot = c.author?.type === 'Bot' || authorName.includes('[bot]') || authorName === 'GitHub';
+    const commitDate = c.commit?.author?.date ? new Date(c.commit.author.date) : new Date();
+
+    const dev = getOrCreateDev(login, authorName, avatarUrl, profileUrl, isBot);
+    dev.commitCount += 1;
+    if (!dev.lastActiveDate || commitDate > new Date(dev.lastActiveDate)) {
+      dev.lastActiveDate = commitDate.toISOString();
+    }
+
+    if (dev.recentCommits.length < 10) {
+      dev.recentCommits.push({
+        sha: c.sha,
+        shortSha: c.sha.substring(0, 7),
+        message: c.commit?.message?.split('\n')[0] || 'No commit message',
+        date: commitDate.toISOString(),
+        htmlUrl: c.html_url,
+      });
+    }
+  }
+
+  // Process Pull Requests
+  for (const p of rawPulls) {
+    const login = p.user?.login || null;
+    const authorName = p.user?.login || 'Unknown Contributor';
+    const avatarUrl = p.user?.avatar_url || '';
+    const profileUrl = p.user?.html_url || '';
+    const isBot = p.user?.type === 'Bot' || (login && login.includes('[bot]'));
+    const prDate = new Date(p.updated_at || p.created_at || Date.now());
+
+    const dev = getOrCreateDev(login, authorName, avatarUrl, profileUrl, isBot);
+    dev.prsOpenedCount += 1;
+    if (p.merged_at) dev.prsMergedCount += 1;
+
+    if (!dev.lastActiveDate || prDate > new Date(dev.lastActiveDate)) {
+      dev.lastActiveDate = prDate.toISOString();
+    }
+
+    if (dev.recentPrs.length < 10) {
+      dev.recentPrs.push({
+        number: p.number,
+        title: p.title,
+        state: p.state,
+        isMerged: Boolean(p.merged_at),
+        createdAt: p.created_at,
+        updatedAt: p.updated_at,
+        htmlUrl: p.html_url,
+      });
+    }
+  }
+
+  // Process Issues
+  for (const i of rawIssues) {
+    const login = i.user?.login || null;
+    const authorName = i.user?.login || 'Unknown Creator';
+    const avatarUrl = i.user?.avatar_url || '';
+    const profileUrl = i.user?.html_url || '';
+    const isBot = i.user?.type === 'Bot' || (login && login.includes('[bot]'));
+    const issueDate = new Date(i.updated_at || i.created_at || Date.now());
+
+    const dev = getOrCreateDev(login, authorName, avatarUrl, profileUrl, isBot);
+    dev.issuesCreatedCount += 1;
+
+    if (!dev.lastActiveDate || issueDate > new Date(dev.lastActiveDate)) {
+      dev.lastActiveDate = issueDate.toISOString();
+    }
+
+    if (dev.recentIssues.length < 10) {
+      dev.recentIssues.push({
+        number: i.number,
+        title: i.title,
+        state: i.state,
+        createdAt: i.created_at,
+        htmlUrl: i.html_url,
+      });
+    }
+  }
+
+  // Convert developers map to array, sorted by total activity (commits + PRs) descending
+  const developers = Array.from(developerMap.values()).sort((a, b) => {
+    const totalA = a.commitCount + a.prsOpenedCount;
+    const totalB = b.commitCount + b.prsOpenedCount;
+    return totalB - totalA;
+  });
+
+  // --- Compile Recent Unified Development Activity ---
+  const activityFeed = [];
+
+  for (const c of rawCommits.slice(0, 30)) {
+    activityFeed.push({
+      type: 'commit',
+      id: c.sha,
+      title: c.commit?.message?.split('\n')[0] || 'Commit',
+      author: c.author?.login || c.commit?.author?.name || 'Unknown',
+      authorAvatar: c.author?.avatar_url || '',
+      date: c.commit?.author?.date || new Date().toISOString(),
+      htmlUrl: c.html_url,
+      extra: c.sha.substring(0, 7),
+    });
+  }
+
+  for (const p of rawPulls.slice(0, 20)) {
+    activityFeed.push({
+      type: 'pull_request',
+      id: `pr-${p.number}`,
+      title: p.title,
+      author: p.user?.login || 'Unknown',
+      authorAvatar: p.user?.avatar_url || '',
+      date: p.created_at,
+      htmlUrl: p.html_url,
+      extra: p.merged_at ? 'Merged' : p.state,
+      isMerged: Boolean(p.merged_at),
+      number: p.number,
+    });
+  }
+
+  for (const i of rawIssues.slice(0, 20)) {
+    activityFeed.push({
+      type: 'issue',
+      id: `issue-${i.number}`,
+      title: i.title,
+      author: i.user?.login || 'Unknown',
+      authorAvatar: i.user?.avatar_url || '',
+      date: i.created_at,
+      htmlUrl: i.html_url,
+      extra: i.state,
+      number: i.number,
+    });
+  }
+
+  // Sort activity feed by date descending
+  activityFeed.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  return {
+    repository: {
+      owner: repoMeta.owner?.login || owner,
+      name: repoMeta.name || repo,
+      fullName: repoMeta.full_name || `${owner}/${repo}`,
+      private: Boolean(repoMeta.private),
+      defaultBranch: repoMeta.default_branch || 'main',
+      description: repoMeta.description || '',
+      htmlUrl: repoMeta.html_url || `https://github.com/${owner}/${repo}`,
+      openIssuesCount: repoMeta.open_issues_count || 0,
+      starsCount: repoMeta.stargazers_count || 0,
+    },
+    teamOverview: {
+      totalCommits: rawCommits.length,
+      pullRequests: {
+        total: prsOpened,
+        open: prsOpen,
+        merged: prsMerged,
+        closed: prsClosed,
+      },
+      issues: {
+        total: issuesTotal,
+        open: issuesOpen,
+        closed: issuesClosed,
+      },
+      activeDevelopersCount: developers.filter(d => !d.isBot).length,
+    },
+    developers,
+    recentActivity: activityFeed.slice(0, 30),
+    lastSyncedAt: new Date().toISOString(),
+    activityNotice: 'Developer Insights displays raw repository development activity. Action Tracker task completion is grounded in verified deliverables rather than commit counts.',
+  };
+}
+
+/**
+ * Retrieve developer-wise activity grouped by GitHub username, or for a specific developer.
+ */
+export async function getDeveloperWiseActivity({
+  owner: targetOwner,
+  repo: targetRepo,
+  hideBots = false,
+  developer = null,
+} = {}) {
+  const { owner, repo } = await resolveTargetRepo(targetOwner, targetRepo);
+  const insights = await getDeveloperInsights(owner, repo);
+
+  if (developer && developer.trim()) {
+    const username = developer.trim().toLowerCase();
+    const found = insights.developers.find(d => d.username.toLowerCase() === username);
+    return {
+      repository: insights.repository,
+      developer: found || {
+        username: developer.trim(),
+        displayName: developer.trim(),
+        avatarUrl: '',
+        profileUrl: `https://github.com/${encodeURIComponent(developer.trim())}`,
+        isBot: false,
+        commitCount: 0,
+        prsOpenedCount: 0,
+        prsMergedCount: 0,
+        issuesCreatedCount: 0,
+        lastActiveDate: null,
+        recentCommits: [],
+        recentPrs: [],
+        recentIssues: [],
+      },
+      found: Boolean(found),
+      lastSyncedAt: insights.lastSyncedAt,
+    };
+  }
+
+  let list = insights.developers;
+  if (hideBots) {
+    list = list.filter(d => !d.isBot);
+  }
+
+  return {
+    repository: insights.repository,
+    developers: list,
+    totalDevelopers: insights.developers.length,
+    activeDevelopersCount: insights.developers.filter(d => !d.isBot).length,
+    lastSyncedAt: insights.lastSyncedAt,
+  };
+}
+
+/**
+ * Retrieve overall team activity summary.
+ */
+export async function getTeamActivitySummary({
+  owner: targetOwner,
+  repo: targetRepo,
+  developer = null,
+} = {}) {
+  const { owner, repo } = await resolveTargetRepo(targetOwner, targetRepo);
+  const insights = await getDeveloperInsights(owner, repo);
+
+  let recentActivity = insights.recentActivity;
+  if (developer && developer.trim()) {
+    const filterUser = developer.trim().toLowerCase();
+    recentActivity = recentActivity.filter(a => a.author.toLowerCase() === filterUser);
+  }
+
+  return {
+    repository: insights.repository,
+    teamOverview: insights.teamOverview,
+    developerFilter: developer ? developer.trim() : null,
+    developers: insights.developers,
+    recentActivity,
+    activityNotice: insights.activityNotice,
+    lastSyncedAt: insights.lastSyncedAt,
+  };
 }

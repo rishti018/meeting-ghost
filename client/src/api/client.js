@@ -104,6 +104,96 @@ export const api = {
   syncTaskWithGitHub: (taskId) => request(`/github/tasks/${taskId}/sync`, {
     method: 'POST',
   }),
+  getDeveloperInsights: (owner, repo) => {
+    const params = new URLSearchParams();
+    if (owner) params.append('owner', owner);
+    if (repo) params.append('repo', repo);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request(`/github/developer-insights${query}`);
+  },
+  getDeveloperSummary: (owner, repo, developer) => {
+    const params = new URLSearchParams();
+    if (owner) params.append('owner', owner);
+    if (repo) params.append('repo', repo);
+    if (developer) params.append('developer', developer);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request(`/github/developer-insights/summary${query}`);
+  },
+  getDeveloperCommits: ({ owner, repo, branch, author, limit, page } = {}) => {
+    const params = new URLSearchParams();
+    if (owner) params.append('owner', owner);
+    if (repo) params.append('repo', repo);
+    if (branch) params.append('branch', branch);
+    if (author) params.append('author', author);
+    if (limit) params.append('limit', limit);
+    if (page) params.append('page', page);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request(`/github/developer-insights/commits${query}`);
+  },
+  getDeveloperPulls: ({ owner, repo, state, author, limit, page } = {}) => {
+    const params = new URLSearchParams();
+    if (owner) params.append('owner', owner);
+    if (repo) params.append('repo', repo);
+    if (state) params.append('state', state);
+    if (author) params.append('author', author);
+    if (limit) params.append('limit', limit);
+    if (page) params.append('page', page);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request(`/github/developer-insights/pulls${query}`);
+  },
+  getDeveloperIssues: ({ owner, repo, state, assignee, author, limit, page } = {}) => {
+    const params = new URLSearchParams();
+    if (owner) params.append('owner', owner);
+    if (repo) params.append('repo', repo);
+    if (state) params.append('state', state);
+    if (assignee) params.append('assignee', assignee);
+    if (author) params.append('author', author);
+    if (limit) params.append('limit', limit);
+    if (page) params.append('page', page);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request(`/github/developer-insights/issues${query}`);
+  },
+  getDeveloperList: ({ owner, repo, hideBots, developer } = {}) => {
+    const params = new URLSearchParams();
+    if (owner) params.append('owner', owner);
+    if (repo) params.append('repo', repo);
+    if (hideBots !== undefined) params.append('hideBots', hideBots);
+    if (developer) params.append('developer', developer);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request(`/github/developer-insights/developers${query}`);
+  },
+  getDeveloperProfile: (username, { owner, repo } = {}) => {
+    const params = new URLSearchParams();
+    if (owner) params.append('owner', owner);
+    if (repo) params.append('repo', repo);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request(`/github/developer-insights/developers/${encodeURIComponent(username)}${query}`);
+  },
+
+  // Commitment vs Execution Intelligence (Phase 3)
+  getCommitmentInsights: ({ meetingId, owner, status, userMapping, refresh } = {}) => {
+    const params = new URLSearchParams();
+    if (meetingId) params.append('meetingId', meetingId);
+    if (owner) params.append('owner', owner);
+    if (status) params.append('status', status);
+    if (userMapping) {
+      params.append('userMapping', typeof userMapping === 'string' ? userMapping : JSON.stringify(userMapping));
+    }
+    if (refresh) params.append('refresh', 'true');
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request(`/github/commitment-insights${query}`);
+  },
+  postCommitmentInsights: (payload = {}) => request('/github/commitment-insights', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+  getTaskCommitmentInsight: (taskId, { mappedUser, refresh } = {}) => {
+    const params = new URLSearchParams();
+    if (mappedUser) params.append('mappedUser', mappedUser);
+    if (refresh) params.append('refresh', 'true');
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request(`/github/commitment-insights/${encodeURIComponent(taskId)}${query}`);
+  },
 
   // Decisions
   listDecisions: () => request('/decisions'),

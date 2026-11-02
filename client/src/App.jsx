@@ -8,6 +8,7 @@ import { NewMeeting } from './pages/NewMeeting';
 import { ActionTracker } from './pages/ActionTracker';
 import { DecisionRegister } from './pages/DecisionRegister';
 import { AskMeetings } from './pages/AskMeetings';
+import { DeveloperInsights } from './pages/DeveloperInsights';
 import { Settings } from './pages/Settings';
 
 export function App() {
@@ -22,6 +23,7 @@ export function App() {
           <Route path="tasks" element={<ActionTracker />} />
           <Route path="decisions" element={<DecisionRegister />} />
           <Route path="ask" element={<AskMeetings />} />
+          <Route path="developer-insights" element={<DeveloperInsights />} />
           <Route path="settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
